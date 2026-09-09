@@ -63,3 +63,5 @@ for(const c of cases) {
 const summary = results.reduce((a,r)=>{a[r.status]=(a[r.status]||0)+1;return a;},{});
 console.log('SUMMARY', JSON.stringify(summary));
 await import('node:fs/promises').then(fs=>fs.writeFile('commons-filter-benchmark.json', JSON.stringify({threshold,summary,results},null,2)));
+
+// benchmark revision 1
