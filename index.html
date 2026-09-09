@@ -1260,7 +1260,12 @@ async function loadCatalogVehicleImage(brand, model, year) {
         const data = await response.json();
         if (!data.found || !data.image_url) throw new Error('No matching photo');
 
-        setVehicleImage(data.image_url);
+        const imageParams = new URLSearchParams({
+            make: brand,
+            modelFamily: model,
+            modelYear: String(year)
+        });
+        setVehicleImage(carApiBase + '?' + imageParams.toString());
         setImageAttribution(data.attribution || 'Vehicle image via Wikimedia Commons', data.reference || '');
         if (summary) summary.textContent = 'Catalog Image Loaded';
         return true;
