@@ -1,0 +1,24 @@
+name: Commons Filter Benchmark
+
+on:
+  push:
+    paths:
+      - scripts/commons-filter-benchmark.mjs
+  workflow_dispatch:
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run 25-case benchmark
+        run: node scripts/commons-filter-benchmark.mjs
+      - name: Upload benchmark
+        uses: actions/upload-artifact@v4
+        with:
+          name: commons-filter-benchmark
+          path: commons-filter-benchmark.json
+          retention-days: 14
