@@ -31,6 +31,8 @@ test('WebbWraps catalog critical path', async ({ page }, testInfo) => {
   await expect(page.getByTestId('vehicle-picker')).toContainText('Toyota Camry');
   await expect(page.locator('#selection-summary')).toContainText(/Catalog (Image Loaded|Fallback Image)/, { timeout: 20_000 });
   await expect(page.getByTestId('vehicle-image')).toBeVisible();
+  await expect(page.getByTestId('vehicle-image')).toHaveAttribute('src', /carapi\.trustcar\.info\/getImage/, { timeout: 20_000 });
+  await expect.poll(async () => page.getByTestId('vehicle-image').evaluate(img => img.complete && img.naturalWidth > 0)).toBe(true);
   await verificationShot(page, testInfo, 'vehicle-selected');
 
   await page.getByTestId('swatch-trigger').click();
