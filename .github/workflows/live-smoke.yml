@@ -1,0 +1,122 @@
+name: Live Smoke Test
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Browser target to verify
+        required: true
+        default: deployed
+        type: choice
+        options: [local, deployed]
+      live_base_url:
+        description: Optional deployed HTTPS URL override
+        required: false
+        type: string
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    env:
+      LIVE_SMOKE_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'deployed' }}
+      LOCAL_BASE_URL: http://127.0.0.1:4173
+      CONFIGURED_LIVE_BASE_URL: https://phshbone.github.io/webbwraps/
+      INPUT_LIVE_BASE_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.live_base_url || '' }}
+      DEPLOY_IDENTITY_FILES: index.html
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Resolve test mode and URL
+        shell: bash
+        run: |
+          set -euo pipefail
+          mode="${LIVE_SMOKE_MODE:-deployed}"
+          if [ "$mode" = "local" ]; then
+            base="$LOCAL_BASE_URL"
+          else
+            base="${INPUT_LIVE_BASE_URL:-${CONFIGURED_LIVE_BASE_URL}}"
+            case "$base" in https://*) ;; *) echo "Deployed mode requires HTTPS"; exit 2;; esac
+          fi
+          echo "BASE_URL=$base" >> "$GITHUB_ENV"
+          echo "Mode: $mode"
+          echo "URL: $base"
+
+      - name: Start local smoke server
+        if: env.LIVE_SMOKE_MODE == 'local'
+        shell: bash
+        run: |
+          npm run serve:smoke > /tmp/webbwraps-smoke.log 2>&1 &
+          for attempt in $(seq 1 30); do
+            curl --fail --silent "$LOCAL_BASE_URL" >/dev/null && exit 0
+            sleep 1
+          done
+          cat /tmp/webbwraps-smoke.log || true
+          exit 1
+
+      - name: Wait for exact deployed build
+        if: env.LIVE_SMOKE_MODE == 'deployed'
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="${BASE_URL%/}"
+          deadline=$((SECONDS + 300))
+          while true; do
+            tmp="$(mktemp)"
+            if curl --fail --silent --show-error -H 'Cache-Control: no-cache, no-store, max-age=0' \
+              "${base}/index.html?live-smoke-rev=${GITHUB_SHA}" -o "$tmp" && cmp -s index.html "$tmp"; then
+              rm -f "$tmp"
+              echo "Exact deployed index.html verified for $GITHUB_SHA"
+              break
+            fi
+            rm -f "$tmp"
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "Timed out waiting for GitHub Pages deployment."
+              exit 1
+            fi
+            sleep 10
+          done
+
+      - name: Run Live Smoke Test
+        run: npm run test:live-smoke
+
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: webbwraps-verification-${{ env.LIVE_SMOKE_MODE }}
+          path: verification-artifacts/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: webbwraps-playwright-report-${{ env.LIVE_SMOKE_MODE }}
+          path: playwright-report/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: webbwraps-failure-evidence-${{ env.LIVE_SMOKE_MODE }}
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 14
