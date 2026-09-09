@@ -110,27 +110,46 @@ async function fetchJson(url) {
   return response;
 }
 
-async function runCase(c) {
+async function searchPages(c, search) {
   const p = new URLSearchParams({
     action:'query',
     format:'json',
     origin:'*',
     generator:'search',
     gsrnamespace:'6',
-    gsrsearch: c.year + ' ' + c.make + ' ' + c.model,
+    gsrsearch: search,
     gsrlimit:'20',
     prop:'imageinfo|categories',
     iiprop:'url|size|extmetadata',
     iiurlwidth:'1400',
     iiextmetadatafilter:'ImageDescription|ObjectName|Artist|Credit|LicenseShortName|LicenseUrl',
-    cllimit:'max'
+    cllimit:'max',
+    maxlag:'5'
   });
 
   const r = await fetchJson(API + '?' + p.toString());
-  if (!r.ok) return { ...c, status:'ERROR', reason:'HTTP ' + r.status };
-
+  if (!r.ok) return { error: 'HTTP ' + r.status, pages: [] };
   const data = await r.json();
-  const ranked = Object.values(data.query?.pages || {})
+  return { pages: Object.values(data.query?.pages || []) };
+}
+
+async function runCase(c) {
+  const exactPhrase = c.year + ' ' + c.make + ' ' + c.model;
+  const primary = await searchPages(c, 'intitle:"' + exactPhrase + '"');
+  if (primary.error && primary.error !== 'HTTP 429') {
+    return { ...c, status:'ERROR', reason:primary.error };
+  }
+
+  await sleep(900);
+  const secondary = await searchPages(c, exactPhrase);
+  if (secondary.error && primary.pages.length === 0) {
+    return { ...c, status:'ERROR', reason:secondary.error };
+  }
+
+  const byId = new Map();
+  for (const page of [...primary.pages, ...secondary.pages]) byId.set(page.pageid, page);
+
+  const ranked = [...byId.values()]
     .map(page => ({ page, score: score(page, c.make, c.model, c.year) }))
     .filter(x => x.score > -999)
     .sort((a,b) => b.score - a.score);
@@ -159,7 +178,7 @@ for (const c of cases) {
   const result = await runCase(c);
   results.push(result);
   console.log(JSON.stringify(result));
-  await sleep(1200);
+  await sleep(1800);
 }
 
 const summary = results.reduce((acc,r) => {
