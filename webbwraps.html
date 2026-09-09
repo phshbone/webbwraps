@@ -1313,26 +1313,49 @@ function scoreCommonsCandidate(page, brand, model, year) {
     return { score, reason: score >= commonsSuitabilityThreshold ? 'usable' : 'below threshold' };
 }
 
-async function findBestCommonsVehicleImage(brand, model, year) {
+async function fetchCommonsPages(search) {
     const params = new URLSearchParams({
         action: 'query',
         format: 'json',
         origin: '*',
         generator: 'search',
         gsrnamespace: '6',
-        gsrsearch: `${year} ${brand} ${model}`,
+        gsrsearch: search,
         gsrlimit: '20',
         prop: 'imageinfo|categories',
         iiprop: 'url|size|extmetadata',
         iiurlwidth: '1400',
         iiextmetadatafilter: 'ImageDescription|ObjectName|Artist|Credit|LicenseShortName|LicenseUrl',
-        cllimit: 'max'
+        cllimit: 'max',
+        maxlag: '5'
     });
 
     const response = await fetch(commonsApiBase + '?' + params.toString());
     if (!response.ok) throw new Error('Commons API ' + response.status);
     const data = await response.json();
-    const pages = Object.values(data.query?.pages || {});
+    return Object.values(data.query?.pages || {});
+}
+
+async function findBestCommonsVehicleImage(brand, model, year) {
+    const exactPhrase = year + ' ' + brand + ' ' + model;
+    let pages = [];
+
+    try {
+        pages = await fetchCommonsPages('intitle:"' + exactPhrase + '"');
+    } catch (error) {
+        console.warn('Exact-title Commons search failed.', error);
+    }
+
+    try {
+        const broader = await fetchCommonsPages(exactPhrase);
+        const byId = new Map();
+        [...pages, ...broader].forEach(page => byId.set(page.pageid, page));
+        pages = [...byId.values()];
+    } catch (error) {
+        if (!pages.length) throw error;
+        console.warn('Broader Commons search failed; using exact-title candidates.', error);
+    }
+
     const candidates = pages
         .map(page => ({ page, ...scoreCommonsCandidate(page, brand, model, year) }))
         .filter(item => item.score > -999)
@@ -1390,36 +1413,10 @@ async function loadCatalogVehicleImage(brand, model, year) {
         console.warn('Wikimedia filter failed; trying CarAPI fallback.', error);
     }
 
-    try {
-        const params = new URLSearchParams({
-            make: brand,
-            modelFamily: model,
-            modelYear: String(year),
-            format: 'json'
-        });
-        const response = await fetch(carApiBase + '?' + params.toString(), {
-            headers: { 'Accept': 'application/json' }
-        });
-        if (!response.ok) throw new Error('CarAPI ' + response.status);
-        const data = await response.json();
-        if (!data.found) throw new Error('No matching fallback photo');
-
-        const imageParams = new URLSearchParams({
-            make: brand,
-            modelFamily: model,
-            modelYear: String(year)
-        });
-        setVehicleImage(carApiBase + '?' + imageParams.toString());
-        setImageAttribution((data.attribution || 'Vehicle image via Wikimedia Commons') + ' · unfiltered fallback', data.reference || '');
-        if (summary) summary.textContent = 'Unfiltered Fallback Image';
-        window.__LAST_CATALOG_RESULT__ = { source: 'carapi-fallback', brand, model, year };
-        return true;
-    } catch (error) {
-        console.warn('All catalog image sources failed.', error);
-        if (summary) summary.textContent = 'No Suitable Catalog Image';
-        window.__LAST_CATALOG_RESULT__ = { source: 'none', brand, model, year };
-        return false;
-    }
+    if (summary) summary.textContent = 'No Suitable Catalog Image';
+    setImageAttribution('No wrap-suitable exact-year Wikimedia image found.', '');
+    window.__LAST_CATALOG_RESULT__ = { source: 'none', brand, model, year };
+    return false;
 }
 
 async function selectVehicle(brand, model, year) {
