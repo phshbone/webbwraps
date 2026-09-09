@@ -1234,6 +1234,32 @@ function plainText(value = '') {
     return (div.textContent || div.innerText || '').replace(/\s+/g, ' ').trim();
 }
 
+function normalizeVehicleText(value = '') {
+    return plainText(value).toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function escapeRegex(value) {
+    return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function hasExactModelYear(page, brand, model, year) {
+    const info = page.imageinfo?.[0] || {};
+    const meta = info.extmetadata || {};
+    const title = normalizeVehicleText((page.title || '').replace(/^File:/i, ''));
+    const description = normalizeVehicleText(meta.ImageDescription?.value);
+    const make = normalizeVehicleText(brand);
+    const family = normalizeVehicleText(model);
+    const target = String(year);
+
+    const leadingPattern = new RegExp('^' + escapeRegex(target) + '\\s+' + escapeRegex(make) + '\\s+' + escapeRegex(family) + '(?:\\s|$)');
+    if (leadingPattern.test(title)) return true;
+
+    const makeModel = escapeRegex(make + ' ' + family);
+    const nearPatternA = new RegExp('(?:^|\\b)' + escapeRegex(target) + '\\s+' + makeModel + '(?:\\s|\\b)');
+    const nearPatternB = new RegExp(makeModel + '.{0,24}\\b' + escapeRegex(target) + '\\b');
+    return nearPatternA.test(description) || nearPatternB.test(description);
+}
+
 function scoreCommonsCandidate(page, brand, model, year) {
     const info = page.imageinfo?.[0] || {};
     const meta = info.extmetadata || {};
@@ -1247,11 +1273,10 @@ function scoreCommonsCandidate(page, brand, model, year) {
 
     const makeTokens = String(brand).toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
     const modelTokens = String(model).toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
-    const exactYear = haystack.includes(String(year));
     const makeMatch = makeTokens.every(t => haystack.includes(t));
     const modelMatch = modelTokens.every(t => haystack.includes(t));
 
-    if (!exactYear || !makeMatch || !modelMatch) {
+    if (!hasExactModelYear(page, brand, model, year) || !makeMatch || !modelMatch) {
         return { score: -999, reason: 'year/model mismatch' };
     }
 
@@ -1296,7 +1321,7 @@ async function findBestCommonsVehicleImage(brand, model, year) {
         generator: 'search',
         gsrnamespace: '6',
         gsrsearch: `${year} ${brand} ${model}`,
-        gsrlimit: '40',
+        gsrlimit: '20',
         prop: 'imageinfo|categories',
         iiprop: 'url|size|extmetadata',
         iiurlwidth: '1400',
