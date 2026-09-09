@@ -1,0 +1,45 @@
+{
+  "updatedAt": "2026-09-09",
+  "policy": "Only manufacturer assets with explicit permission for commercial modification/republication may be imported into the curated vehicle catalog.",
+  "manufacturers": [
+    {
+      "make": "Toyota",
+      "source": "Toyota USA Newsroom",
+      "status": "blocked",
+      "reason": "Editorial use only; commercial use prohibited; modification prohibited without prior written approval.",
+      "termsUrl": "https://pressroom.toyota.com/terms-agreements/"
+    },
+    {
+      "make": "Ford",
+      "source": "Ford Media Center",
+      "status": "approval-required",
+      "reason": "Editorial use only by default; Ford instructs users to contact media@ford.com for advertising, marketing, or other commercial use.",
+      "termsUrl": "https://media.ford.com/"
+    },
+    {
+      "make": "Honda",
+      "source": "Honda News",
+      "status": "pending-review"
+    },
+    {
+      "make": "Chevrolet",
+      "source": "GM Media",
+      "status": "pending-review"
+    },
+    {
+      "make": "Cadillac",
+      "source": "GM Media",
+      "status": "pending-review"
+    },
+    {
+      "make": "Dodge",
+      "source": "Stellantis Media",
+      "status": "pending-review"
+    },
+    {
+      "make": "Ram",
+      "source": "Stellantis Media",
+      "status": "pending-review"
+    }
+  ]
+}
