@@ -9,7 +9,11 @@ const cases = [
 function stripHtml(value='') {
   return String(value).replace(/<[^>]*>/g,' ').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/\s+/g,' ').trim();
 }
-function score(page, make, model, year) {
+function norm(value='') {
+  return stripHtml(value).toLowerCase().replace(/[_-]+/g,' ').replace(/\s+/g,' ').trim();
+}
+function esc(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g,'\\function score(page, make, model, year) {
   const info = page.imageinfo?.[0] || {};
   const meta = info.extmetadata || {};
   const categories = (page.categories || []).map(c => c.title || '').join(' ');
@@ -17,6 +21,28 @@ function score(page, make, model, year) {
   const makeTokens = make.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
   const modelTokens = model.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
   if (!text.includes(String(year)) || !makeTokens.every(t=>text.includes(t)) || !modelTokens.every(t=>text.includes(t))) return -999;
+  let s = 40;');
+}
+function hasExactModelYear(page, make, model, year) {
+  const info = page.imageinfo?.[0] || {};
+  const meta = info.extmetadata || {};
+  const title = norm((page.title||'').replace(/^File:/i,''));
+  const description = norm(meta.ImageDescription?.value);
+  const target = String(year);
+  const mm = norm(make + ' ' + model);
+  const leading = new RegExp('^' + esc(target) + '\\s+' + esc(norm(make)) + '\\s+' + esc(norm(model)) + '(?:\\s|$)');
+  const descA = new RegExp('(?:^|\\b)' + esc(target) + '\\s+' + esc(mm) + '(?:\\s|\\b)');
+  const descB = new RegExp(esc(mm) + '.{0,24}\\b' + esc(target) + '\\b');
+  return leading.test(title) || descA.test(description) || descB.test(description);
+}
+function score(page, make, model, year) {
+  const info = page.imageinfo?.[0] || {};
+  const meta = info.extmetadata || {};
+  const categories = (page.categories || []).map(c => c.title || '').join(' ');
+  const text = [page.title||'', stripHtml(meta.ImageDescription?.value), stripHtml(meta.ObjectName?.value), categories].join(' ').toLowerCase();
+  const makeTokens = make.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  const modelTokens = model.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  if (!hasExactModelYear(page, make, model, year) || !makeTokens.every(t=>text.includes(t)) || !modelTokens.every(t=>text.includes(t))) return -999;
   let s = 40;
   for (const [term,pts] of [['front left',18],['front right',18],['front-left',18],['front-right',18],['three-quarter',16],['three quarter',16],['3/4',16],['side view',12],['profile',10],['front view',8],['front',5]]) if(text.includes(term)) s += pts;
   for (const [term,pts] of [['interior',-35],['dashboard',-35],['engine',-30],['rear view',-18],['rear',-10],['auto show',-20],['motor show',-20],['salon',-12],['museum',-16],['rain',-20],['wet',-10],['snow',-18],['gas station',-28],['petrol station',-28],['fuel station',-28],['refueling',-28],['refuelling',-28],['traffic',-15],['street scene',-12],['damaged',-30],['wreck',-35],['police',-12],['taxi',-12]]) if(text.includes(term)) s += pts;
@@ -30,12 +56,17 @@ function score(page, make, model, year) {
 async function runCase(c) {
   const p = new URLSearchParams({
     action:'query', format:'json', origin:'*', generator:'search',
-    gsrnamespace:'6', gsrsearch:`${c.year} ${c.make} ${c.model}`, gsrlimit:'40',
+    gsrnamespace:'6', gsrsearch:`${c.year} ${c.make} ${c.model}`, gsrlimit:'20',
     prop:'imageinfo|categories', iiprop:'url|size|extmetadata', iiurlwidth:'1400',
     iiextmetadatafilter:'ImageDescription|ObjectName|Artist|Credit|LicenseShortName|LicenseUrl',
     cllimit:'max'
   });
-  const r = await fetch(API+'?'+p);
+  let r;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    r = await fetch(API+'?'+p, { headers: { 'User-Agent': 'WebbWrapsBenchmark/1.0 (GitHub Actions)' } });
+    if (r.status !== 429) break;
+    await new Promise(resolve => setTimeout(resolve, 5000 * (attempt + 1)));
+  }
   if(!r.ok) return {...c,status:'ERROR',reason:'HTTP '+r.status};
   const data = await r.json();
   const ranked = Object.values(data.query?.pages||{})
@@ -59,9 +90,12 @@ for(const c of cases) {
   const result=await runCase(c);
   results.push(result);
   console.log(JSON.stringify(result));
+  await new Promise(resolve => setTimeout(resolve, 1200));
 }
 const summary = results.reduce((a,r)=>{a[r.status]=(a[r.status]||0)+1;return a;},{});
 console.log('SUMMARY', JSON.stringify(summary));
 await import('node:fs/promises').then(fs=>fs.writeFile('commons-filter-benchmark.json', JSON.stringify({threshold,summary,results},null,2)));
 
 // benchmark revision 1
+
+// benchmark revision 2
