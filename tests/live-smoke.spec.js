@@ -16,7 +16,7 @@ test('WebbWraps catalog critical path', async ({ page }, testInfo) => {
   const browserErrors = [];
   page.on('pageerror', error => browserErrors.push(error.message));
 
-  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await page.goto('./', { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.__APP_READY__ === true);
   await expect(page).toHaveTitle(/WebbWraps/i);
   await expect(page.getByTestId('app-shell')).toBeVisible();
