@@ -1227,6 +1227,56 @@ function renderPickerLevel() {
 const carApiBase = 'https://carapi.trustcar.info/getImage';
 const commonsApiBase = 'https://commons.wikimedia.org/w/api.php';
 const commonsSuitabilityThreshold = 55;
+const curatedCatalogUrl = './data/vehicle-catalog.json';
+let curatedCatalogPromise = null;
+
+function normalizeCatalogKey(value = '') {
+    return normalizeVehicleText(value).replace(/\s+/g, ' ');
+}
+
+async function loadCuratedCatalog() {
+    if (!curatedCatalogPromise) {
+        curatedCatalogPromise = fetch(curatedCatalogUrl, { cache: 'no-store' })
+            .then(response => {
+                if (!response.ok) throw new Error('Curated catalog ' + response.status);
+                return response.json();
+            })
+            .catch(error => {
+                console.warn('Curated catalog unavailable.', error);
+                return { vehicles: [] };
+            });
+    }
+    return curatedCatalogPromise;
+}
+
+async function findCuratedVehicleImage(brand, model, year) {
+    const catalog = await loadCuratedCatalog();
+    const targetMake = normalizeCatalogKey(brand);
+    const targetModel = normalizeCatalogKey(model);
+    const targetYear = Number(year);
+
+    const matches = (catalog.vehicles || []).filter(item =>
+        item.rightsStatus === 'approved' &&
+        Number(item.year) === targetYear &&
+        normalizeCatalogKey(item.make) === targetMake &&
+        normalizeCatalogKey(item.model) === targetModel &&
+        item.image
+    );
+
+    if (!matches.length) return null;
+
+    const best = matches.sort((a, b) =>
+        (b.suitability || 0) - (a.suitability || 0)
+    )[0];
+
+    return {
+        imageUrl: best.image,
+        attribution: best.attribution || best.sourceName || 'Curated vehicle image',
+        pageUrl: best.sourceUrl || '',
+        suitability: best.suitability || null,
+        sourceType: best.sourceType || 'curated'
+    };
+}
 
 function plainText(value = '') {
     const div = document.createElement('div');
@@ -1397,8 +1447,24 @@ function setImageAttribution(text, reference) {
 
 async function loadCatalogVehicleImage(brand, model, year) {
     const summary = document.getElementById('selection-summary');
-    if (summary) summary.textContent = 'Filtering Wikimedia candidates…';
+    if (summary) summary.textContent = 'Checking curated catalog…';
     setImageAttribution('', '');
+
+    try {
+        const curated = await findCuratedVehicleImage(brand, model, year);
+        if (curated) {
+            setVehicleImage(curated.imageUrl);
+            const scoreText = curated.suitability ? ' · suitability ' + curated.suitability : '';
+            setImageAttribution(curated.attribution + scoreText, curated.pageUrl);
+            if (summary) summary.textContent = 'Curated Catalog Image';
+            window.__LAST_CATALOG_RESULT__ = { source: curated.sourceType, ...curated, brand, model, year };
+            return true;
+        }
+    } catch (error) {
+        console.warn('Curated catalog lookup failed.', error);
+    }
+
+    if (summary) summary.textContent = 'Filtering Wikimedia candidates…';
 
     try {
         const commons = await findBestCommonsVehicleImage(brand, model, year);
