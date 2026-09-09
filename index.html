@@ -1225,6 +1225,113 @@ function renderPickerLevel() {
 }
 
 const carApiBase = 'https://carapi.trustcar.info/getImage';
+const commonsApiBase = 'https://commons.wikimedia.org/w/api.php';
+const commonsSuitabilityThreshold = 55;
+
+function plainText(value = '') {
+    const div = document.createElement('div');
+    div.innerHTML = String(value);
+    return (div.textContent || div.innerText || '').replace(/\s+/g, ' ').trim();
+}
+
+function scoreCommonsCandidate(page, brand, model, year) {
+    const info = page.imageinfo?.[0] || {};
+    const meta = info.extmetadata || {};
+    const categories = (page.categories || []).map(c => c.title || '').join(' ');
+    const haystack = [
+        page.title || '',
+        plainText(meta.ImageDescription?.value),
+        plainText(meta.ObjectName?.value),
+        categories
+    ].join(' ').toLowerCase();
+
+    const makeTokens = String(brand).toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+    const modelTokens = String(model).toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+    const exactYear = haystack.includes(String(year));
+    const makeMatch = makeTokens.every(t => haystack.includes(t));
+    const modelMatch = modelTokens.every(t => haystack.includes(t));
+
+    if (!exactYear || !makeMatch || !modelMatch) {
+        return { score: -999, reason: 'year/model mismatch' };
+    }
+
+    let score = 40;
+    const positives = [
+        ['front left', 18], ['front right', 18], ['front-left', 18], ['front-right', 18],
+        ['three-quarter', 16], ['three quarter', 16], ['3/4', 16],
+        ['side view', 12], ['profile', 10], ['front view', 8], ['front', 5]
+    ];
+    const negatives = [
+        ['interior', -35], ['dashboard', -35], ['engine', -30], ['rear view', -18],
+        ['rear', -10], ['auto show', -20], ['motor show', -20], ['salon', -12],
+        ['museum', -16], ['rain', -20], ['wet', -10], ['snow', -18],
+        ['gas station', -28], ['petrol station', -28], ['fuel station', -28],
+        ['refueling', -28], ['refuelling', -28], ['traffic', -15], ['street scene', -12],
+        ['damaged', -30], ['wreck', -35], ['police', -12], ['taxi', -12]
+    ];
+
+    positives.forEach(([term, pts]) => { if (haystack.includes(term)) score += pts; });
+    negatives.forEach(([term, pts]) => { if (haystack.includes(term)) score += pts; });
+
+    const width = info.width || 0;
+    const height = info.height || 0;
+    const maxDim = Math.max(width, height);
+    if (maxDim >= 5000) score += 12;
+    else if (maxDim >= 3000) score += 9;
+    else if (maxDim >= 1800) score += 5;
+    else if (maxDim < 1200) score -= 20;
+
+    if (/quality images/i.test(categories)) score += 12;
+    if (/featured pictures/i.test(categories)) score += 10;
+    if (/valued images/i.test(categories)) score += 7;
+
+    return { score, reason: score >= commonsSuitabilityThreshold ? 'usable' : 'below threshold' };
+}
+
+async function findBestCommonsVehicleImage(brand, model, year) {
+    const params = new URLSearchParams({
+        action: 'query',
+        format: 'json',
+        origin: '*',
+        generator: 'search',
+        gsrnamespace: '6',
+        gsrsearch: `${year} ${brand} ${model}`,
+        gsrlimit: '40',
+        prop: 'imageinfo|categories',
+        iiprop: 'url|size|extmetadata',
+        iiurlwidth: '1400',
+        iiextmetadatafilter: 'ImageDescription|ObjectName|Artist|Credit|LicenseShortName|LicenseUrl',
+        cllimit: 'max'
+    });
+
+    const response = await fetch(commonsApiBase + '?' + params.toString());
+    if (!response.ok) throw new Error('Commons API ' + response.status);
+    const data = await response.json();
+    const pages = Object.values(data.query?.pages || {});
+    const candidates = pages
+        .map(page => ({ page, ...scoreCommonsCandidate(page, brand, model, year) }))
+        .filter(item => item.score > -999)
+        .sort((a, b) => b.score - a.score);
+
+    const best = candidates[0];
+    if (!best || best.score < commonsSuitabilityThreshold) {
+        return { found: false, candidates: candidates.slice(0, 5) };
+    }
+
+    const info = best.page.imageinfo?.[0] || {};
+    const meta = info.extmetadata || {};
+    const artist = plainText(meta.Artist?.value);
+    const license = plainText(meta.LicenseShortName?.value);
+    const attribution = [artist, license].filter(Boolean).join(' · ') || 'Wikimedia Commons';
+    return {
+        found: true,
+        imageUrl: info.thumburl || info.url,
+        pageUrl: info.descriptionurl || '',
+        attribution,
+        score: best.score,
+        candidates: candidates.slice(0, 5)
+    };
+}
 
 function setImageAttribution(text, reference) {
     const el = document.getElementById('image-attribution');
@@ -1242,23 +1349,35 @@ function setImageAttribution(text, reference) {
 
 async function loadCatalogVehicleImage(brand, model, year) {
     const summary = document.getElementById('selection-summary');
-    if (summary) summary.textContent = 'Loading vehicle image…';
+    if (summary) summary.textContent = 'Filtering Wikimedia candidates…';
     setImageAttribution('', '');
 
-    const params = new URLSearchParams({
-        make: brand,
-        modelFamily: model,
-        modelYear: String(year),
-        format: 'json'
-    });
+    try {
+        const commons = await findBestCommonsVehicleImage(brand, model, year);
+        if (commons.found) {
+            setVehicleImage(commons.imageUrl);
+            setImageAttribution(commons.attribution + ' · suitability ' + commons.score, commons.pageUrl);
+            if (summary) summary.textContent = 'Filtered Wikimedia Image';
+            window.__LAST_CATALOG_RESULT__ = { source: 'commons-filter', ...commons, brand, model, year };
+            return true;
+        }
+    } catch (error) {
+        console.warn('Wikimedia filter failed; trying CarAPI fallback.', error);
+    }
 
     try {
+        const params = new URLSearchParams({
+            make: brand,
+            modelFamily: model,
+            modelYear: String(year),
+            format: 'json'
+        });
         const response = await fetch(carApiBase + '?' + params.toString(), {
             headers: { 'Accept': 'application/json' }
         });
         if (!response.ok) throw new Error('CarAPI ' + response.status);
         const data = await response.json();
-        if (!data.found || !data.image_url) throw new Error('No matching photo');
+        if (!data.found) throw new Error('No matching fallback photo');
 
         const imageParams = new URLSearchParams({
             make: brand,
@@ -1266,12 +1385,14 @@ async function loadCatalogVehicleImage(brand, model, year) {
             modelYear: String(year)
         });
         setVehicleImage(carApiBase + '?' + imageParams.toString());
-        setImageAttribution(data.attribution || 'Vehicle image via Wikimedia Commons', data.reference || '');
-        if (summary) summary.textContent = 'Catalog Image Loaded';
+        setImageAttribution((data.attribution || 'Vehicle image via Wikimedia Commons') + ' · unfiltered fallback', data.reference || '');
+        if (summary) summary.textContent = 'Unfiltered Fallback Image';
+        window.__LAST_CATALOG_RESULT__ = { source: 'carapi-fallback', brand, model, year };
         return true;
     } catch (error) {
-        console.warn('Catalog image lookup failed; using category fallback.', error);
-        if (summary) summary.textContent = 'Catalog Fallback Image';
+        console.warn('All catalog image sources failed.', error);
+        if (summary) summary.textContent = 'No Suitable Catalog Image';
+        window.__LAST_CATALOG_RESULT__ = { source: 'none', brand, model, year };
         return false;
     }
 }
